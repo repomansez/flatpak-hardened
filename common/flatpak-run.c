@@ -279,6 +279,8 @@ flatpak_run_add_environment_args (FlatpakBwrap    *bwrap,
   g_autofree char *xdg_dirs_conf = NULL;
   gboolean home_access = FALSE;
   gboolean sandboxed = (flags & FLATPAK_RUN_FLAG_SANDBOX) != 0;
+  flatpak_bwrap_add_args (bwrap, "--cap-drop", "ALL", NULL);
+  flatpak_bwrap_add_args (bwrap, "--new-session", NULL);
 
   if ((context->shares & FLATPAK_CONTEXT_SHARED_IPC) == 0)
     {
@@ -1836,123 +1838,148 @@ setup_seccomp (FlatpakBwrap   *bwrap,
 
   __attribute__((cleanup (cleanup_seccomp))) scmp_filter_ctx seccomp = NULL;
 
-  /**** BEGIN NOTE ON CODE SHARING
-   *
-   * There are today a number of different Linux container
-   * implementations.  That will likely continue for long into the
-   * future.  But we can still try to share code, and it's important
-   * to do so because it affects what library and application writers
-   * can do, and we should support code portability between different
-   * container tools.
-   *
-   * This syscall blocklist is copied from linux-user-chroot, which was in turn
-   * clearly influenced by the Sandstorm.io blocklist.
-   *
-   * If you make any changes here, I suggest sending the changes along
-   * to other sandbox maintainers.  Using the libseccomp list is also
-   * an appropriate venue:
-   * https://groups.google.com/forum/#!forum/libseccomp
-   *
-   * A non-exhaustive list of links to container tooling that might
-   * want to share this blocklist:
-   *
-   *  https://github.com/sandstorm-io/sandstorm
-   *    in src/sandstorm/supervisor.c++
-   *  https://github.com/flatpak/flatpak.git
-   *    in common/flatpak-run.c
-   *  https://git.gnome.org/browse/linux-user-chroot
-   *    in src/setup-seccomp.c
-   *
-   * Other useful resources:
-   * https://github.com/systemd/systemd/blob/HEAD/src/shared/seccomp-util.c
-   * https://github.com/moby/moby/blob/HEAD/profiles/seccomp/default.json
-   *
-   **** END NOTE ON CODE SHARING
-   */
   struct
   {
     int                  scall;
-    int                  errnum;
+    uint32_t             action;
     struct scmp_arg_cmp *arg;
-  } syscall_blocklist[] = {
-    /* Block dmesg */
-    {SCMP_SYS (syslog), EPERM},
-    /* Useless old syscall */
-    {SCMP_SYS (uselib), EPERM},
-    /* Don't allow disabling accounting */
-    {SCMP_SYS (acct), EPERM},
-    /* Don't allow reading current quota use */
-    {SCMP_SYS (quotactl), EPERM},
+  } syscall_allowlist[] = {
+    {SCMP_SYS(accept), SCMP_ACT_ALLOW},
+    {SCMP_SYS(access), SCMP_ACT_ALLOW},
+    {SCMP_SYS(arch_prctl), SCMP_ACT_ALLOW},
+    {SCMP_SYS(bind), SCMP_ACT_ALLOW},
+    {SCMP_SYS(brk), SCMP_ACT_ALLOW},
+    {SCMP_SYS(chdir), SCMP_ACT_ALLOW},
+    {SCMP_SYS(chmod), SCMP_ACT_ALLOW},
+    {SCMP_SYS(clock_nanosleep), SCMP_ACT_ALLOW},
+    {SCMP_SYS(clone), SCMP_ACT_ALLOW},
+    {SCMP_SYS(close), SCMP_ACT_ALLOW},
+    {SCMP_SYS(connect), SCMP_ACT_ALLOW},
+    {SCMP_SYS(dup2), SCMP_ACT_ALLOW},
+    {SCMP_SYS(dup3), SCMP_ACT_ALLOW},
+    {SCMP_SYS(epoll_create1), SCMP_ACT_ALLOW},
+    {SCMP_SYS(epoll_ctl), SCMP_ACT_ALLOW},
+    {SCMP_SYS(epoll_wait), SCMP_ACT_ALLOW},
+    {SCMP_SYS(eventfd2), SCMP_ACT_ALLOW},
+    {SCMP_SYS(execve), SCMP_ACT_ALLOW},
+    {SCMP_SYS(exit), SCMP_ACT_ALLOW},
+    {SCMP_SYS(exit_group), SCMP_ACT_ALLOW},
+    {SCMP_SYS(faccessat2), SCMP_ACT_ALLOW},
+    {SCMP_SYS(fadvise64), SCMP_ACT_ALLOW},
+    {SCMP_SYS(fallocate), SCMP_ACT_ALLOW},
+    {SCMP_SYS(fchmod), SCMP_ACT_ALLOW},
+    {SCMP_SYS(fcntl), SCMP_ACT_ALLOW},
+    {SCMP_SYS(fdatasync), SCMP_ACT_ALLOW},
+    {SCMP_SYS(flock), SCMP_ACT_ALLOW},
+    {SCMP_SYS(fstatfs), SCMP_ACT_ALLOW},
+    {SCMP_SYS(fsync), SCMP_ACT_ALLOW},
+    {SCMP_SYS(ftruncate), SCMP_ACT_ALLOW},
+    {SCMP_SYS(futex), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getcwd), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getdents64), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getegid), SCMP_ACT_ALLOW},
+    {SCMP_SYS(geteuid), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getgid), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getpeername), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getpgrp), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getpid), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getppid), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getrandom), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getresgid), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getresuid), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getsockname), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getsockopt), SCMP_ACT_ALLOW},
+    {SCMP_SYS(gettid), SCMP_ACT_ALLOW},
+    {SCMP_SYS(getuid), SCMP_ACT_ALLOW},
+    {SCMP_SYS(inotify_add_watch), SCMP_ACT_ALLOW},
+    {SCMP_SYS(inotify_init1), SCMP_ACT_ALLOW},
+    {SCMP_SYS(ioctl), SCMP_ACT_ALLOW},
+    {SCMP_SYS(link), SCMP_ACT_ALLOW},
+    {SCMP_SYS(linkat), SCMP_ACT_ALLOW},
+    {SCMP_SYS(listen), SCMP_ACT_ALLOW},
+    {SCMP_SYS(lseek), SCMP_ACT_ALLOW},
+    {SCMP_SYS(madvise), SCMP_ACT_ALLOW},
+    {SCMP_SYS(memfd_create), SCMP_ACT_ALLOW},
+    {SCMP_SYS(mincore), SCMP_ACT_ALLOW},
+    {SCMP_SYS(mkdir), SCMP_ACT_ALLOW},
+    {SCMP_SYS(mmap), SCMP_ACT_ALLOW},
+    {SCMP_SYS(mprotect), SCMP_ACT_ALLOW},
+    {SCMP_SYS(mremap), SCMP_ACT_ALLOW},
+    {SCMP_SYS(munmap), SCMP_ACT_ALLOW},
+    {SCMP_SYS(newfstatat), SCMP_ACT_ALLOW},
+    {SCMP_SYS(open), SCMP_ACT_ALLOW},
+    {SCMP_SYS(openat), SCMP_ACT_ALLOW},
+    {SCMP_SYS(pipe2), SCMP_ACT_ALLOW},
+    {SCMP_SYS(poll), SCMP_ACT_ALLOW},
+    {SCMP_SYS(ppoll), SCMP_ACT_ALLOW},
+    {SCMP_SYS(prctl), SCMP_ACT_ALLOW},
+    {SCMP_SYS(pread64), SCMP_ACT_ALLOW},
+    {SCMP_SYS(prlimit64), SCMP_ACT_ALLOW},
+    {SCMP_SYS(pwrite64), SCMP_ACT_ALLOW},
+    {SCMP_SYS(read), SCMP_ACT_ALLOW},
+    {SCMP_SYS(readlink), SCMP_ACT_ALLOW},
+    {SCMP_SYS(readlinkat), SCMP_ACT_ALLOW},
+    {SCMP_SYS(recvfrom), SCMP_ACT_ALLOW},
+    {SCMP_SYS(recvmsg), SCMP_ACT_ALLOW},
+    {SCMP_SYS(rename), SCMP_ACT_ALLOW},
+    {SCMP_SYS(restart_syscall), SCMP_ACT_ALLOW},
+    {SCMP_SYS(rmdir), SCMP_ACT_ALLOW},
+    {SCMP_SYS(rseq), SCMP_ACT_ALLOW},
+    {SCMP_SYS(rt_sigaction), SCMP_ACT_ALLOW},
+    {SCMP_SYS(rt_sigprocmask), SCMP_ACT_ALLOW},
+    {SCMP_SYS(rt_sigreturn), SCMP_ACT_ALLOW},
+    {SCMP_SYS(sched_getaffinity), SCMP_ACT_ALLOW},
+    {SCMP_SYS(sched_setaffinity), SCMP_ACT_ALLOW},
+    {SCMP_SYS(sched_setscheduler), SCMP_ACT_ALLOW},
+    {SCMP_SYS(sched_yield), SCMP_ACT_ALLOW},
+    {SCMP_SYS(sendmsg), SCMP_ACT_ALLOW},
+    {SCMP_SYS(sendto), SCMP_ACT_ALLOW},
+    {SCMP_SYS(set_robust_list), SCMP_ACT_ALLOW},
+    {SCMP_SYS(set_tid_address), SCMP_ACT_ALLOW},
+    {SCMP_SYS(setpriority), SCMP_ACT_ALLOW},
+    {SCMP_SYS(setsockopt), SCMP_ACT_ALLOW},
+    {SCMP_SYS(shutdown), SCMP_ACT_ALLOW},
+    {SCMP_SYS(sigaltstack), SCMP_ACT_ALLOW},
+    {SCMP_SYS(socket), SCMP_ACT_ALLOW},
+    {SCMP_SYS(socketpair), SCMP_ACT_ALLOW},
+    {SCMP_SYS(statfs), SCMP_ACT_ALLOW},
+    {SCMP_SYS(statx), SCMP_ACT_ALLOW},
+    {SCMP_SYS(sysinfo), SCMP_ACT_ALLOW},
+    {SCMP_SYS(tgkill), SCMP_ACT_ALLOW},
+    {SCMP_SYS(timerfd_create), SCMP_ACT_ALLOW},
+    {SCMP_SYS(timerfd_settime), SCMP_ACT_ALLOW},
+    {SCMP_SYS(times), SCMP_ACT_ALLOW},
+    {SCMP_SYS(umask), SCMP_ACT_ALLOW},
+    {SCMP_SYS(uname), SCMP_ACT_ALLOW},
+    {SCMP_SYS(unlink), SCMP_ACT_ALLOW},
+    {SCMP_SYS(wait4), SCMP_ACT_ALLOW},
+    {SCMP_SYS(waitid), SCMP_ACT_ALLOW},
+    {SCMP_SYS(write), SCMP_ACT_ALLOW},
+    {SCMP_SYS(writev), SCMP_ACT_ALLOW},
 
-    /* Don't allow access to the kernel keyring */
-    {SCMP_SYS (add_key), EPERM},
-    {SCMP_SYS (keyctl), EPERM},
-    {SCMP_SYS (request_key), EPERM},
-
-    /* Scary VM/NUMA ops */
-    {SCMP_SYS (move_pages), EPERM},
-    {SCMP_SYS (mbind), EPERM},
-    {SCMP_SYS (get_mempolicy), EPERM},
-    {SCMP_SYS (set_mempolicy), EPERM},
-    {SCMP_SYS (migrate_pages), EPERM},
-
-    /* Don't allow subnamespace setups: */
-    {SCMP_SYS (unshare), EPERM},
-    {SCMP_SYS (setns), EPERM},
-    {SCMP_SYS (mount), EPERM},
-    {SCMP_SYS (umount), EPERM},
-    {SCMP_SYS (umount2), EPERM},
-    {SCMP_SYS (pivot_root), EPERM},
-    {SCMP_SYS (chroot), EPERM},
 #if defined(__s390__) || defined(__s390x__) || defined(__CRIS__)
     /* Architectures with CONFIG_CLONE_BACKWARDS2: the child stack
      * and flags arguments are reversed so the flags come second */
-    {SCMP_SYS (clone), EPERM, &SCMP_A1 (SCMP_CMP_MASKED_EQ, CLONE_NEWUSER, CLONE_NEWUSER)},
+    {SCMP_SYS (clone), SCMP_ACT_ERRNO (EPERM), &SCMP_A1 (SCMP_CMP_MASKED_EQ, CLONE_NEWUSER, CLONE_NEWUSER)},
 #else
     /* Normally the flags come first */
-    {SCMP_SYS (clone), EPERM, &SCMP_A0 (SCMP_CMP_MASKED_EQ, CLONE_NEWUSER, CLONE_NEWUSER)},
+    {SCMP_SYS (clone), SCMP_ACT_ERRNO (EPERM), &SCMP_A0 (SCMP_CMP_MASKED_EQ, CLONE_NEWUSER, CLONE_NEWUSER)},
 #endif
 
     /* Don't allow faking input to the controlling tty (CVE-2017-5226) */
-    {SCMP_SYS (ioctl), EPERM, &SCMP_A1 (SCMP_CMP_MASKED_EQ, 0xFFFFFFFFu, (int) TIOCSTI)},
+    {SCMP_SYS (ioctl), SCMP_ACT_ERRNO (EPERM), &SCMP_A1 (SCMP_CMP_MASKED_EQ, 0xFFFFFFFFu, (int) TIOCSTI)},
     /* In the unlikely event that the controlling tty is a Linux virtual
      * console (/dev/tty2 or similar), copy/paste operations have an effect
      * similar to TIOCSTI (CVE-2023-28100) */
-    {SCMP_SYS (ioctl), EPERM, &SCMP_A1 (SCMP_CMP_MASKED_EQ, 0xFFFFFFFFu, (int) TIOCLINUX)},
+    {SCMP_SYS (ioctl), SCMP_ACT_ERRNO (EPERM), &SCMP_A1 (SCMP_CMP_MASKED_EQ, 0xFFFFFFFFu, (int) TIOCLINUX)},
 
     /* seccomp can't look into clone3()'s struct clone_args to check whether
      * the flags are OK, so we have no choice but to block clone3().
      * Return ENOSYS so user-space will fall back to clone().
      * (CVE-2021-41133; see also https://github.com/moby/moby/commit/9f6b562d) */
-    {SCMP_SYS (clone3), ENOSYS},
-
-    /* New mount manipulation APIs can also change our VFS. There's no
-     * legitimate reason to do these in the sandbox, so block all of them
-     * rather than thinking about which ones might be dangerous.
-     * (CVE-2021-41133) */
-    {SCMP_SYS (open_tree), ENOSYS},
-    {SCMP_SYS (move_mount), ENOSYS},
-    {SCMP_SYS (fsopen), ENOSYS},
-    {SCMP_SYS (fsconfig), ENOSYS},
-    {SCMP_SYS (fsmount), ENOSYS},
-    {SCMP_SYS (fspick), ENOSYS},
-    {SCMP_SYS (mount_setattr), ENOSYS},
+    {SCMP_SYS (clone3), SCMP_ACT_ERRNO (ENOSYS)},
   };
 
-  struct
-  {
-    int                  scall;
-    int                  errnum;
-    struct scmp_arg_cmp *arg;
-  } syscall_nondevel_blocklist[] = {
-    /* Profiling operations; we expect these to be done by tools from outside
-     * the sandbox.  In particular perf has been the source of many CVEs.
-     */
-    {SCMP_SYS (perf_event_open), EPERM},
-    /* Don't allow you to switch to bsd emulation or whatnot */
-    {SCMP_SYS (personality), EPERM, &SCMP_A0 (SCMP_CMP_NE, allowed_personality)},
-    {SCMP_SYS (ptrace), EPERM}
-  };
   /* Blocklist all but unix, inet, inet6 and netlink */
   struct
   {
@@ -1972,7 +1999,7 @@ setup_seccomp (FlatpakBwrap   *bwrap,
   int i, r;
   g_auto(GLnxTmpfile) seccomp_tmpf  = { 0, };
 
-  seccomp = seccomp_init (SCMP_ACT_ALLOW);
+  seccomp = seccomp_init (SCMP_ACT_KILL_PROCESS);
   if (!seccomp)
     return flatpak_fail_error (error, FLATPAK_ERROR_SETUP_FAILED, _("Initialize seccomp failed"));
 
@@ -2032,17 +2059,15 @@ setup_seccomp (FlatpakBwrap   *bwrap,
    * leak system stuff or secrets from other apps.
    */
 
-  for (i = 0; i < G_N_ELEMENTS (syscall_blocklist); i++)
+  for (i = 0; i < G_N_ELEMENTS (syscall_allowlist); i++)
     {
-      int scall = syscall_blocklist[i].scall;
-      int errnum = syscall_blocklist[i].errnum;
-
-      g_return_val_if_fail (errnum == EPERM || errnum == ENOSYS, FALSE);
-
-      if (syscall_blocklist[i].arg)
-        r = seccomp_rule_add (seccomp, SCMP_ACT_ERRNO (errnum), scall, 1, *syscall_blocklist[i].arg);
+      int      scall  = syscall_allowlist[i].scall;
+      uint32_t action = syscall_allowlist[i].action;
+      
+      if (syscall_allowlist[i].arg)
+        r = seccomp_rule_add (seccomp, action, scall, 1, *syscall_allowlist[i].arg);
       else
-        r = seccomp_rule_add (seccomp, SCMP_ACT_ERRNO (errnum), scall, 0);
+        r = seccomp_rule_add (seccomp, action, scall, 0);
 
       /* EFAULT means "internal libseccomp error", but in practice we get
        * this for syscall numbers added via flatpak-syscalls-private.h
@@ -2071,29 +2096,6 @@ setup_seccomp (FlatpakBwrap   *bwrap,
                  scall);
       else if (r < 0)
         return flatpak_fail_error (error, FLATPAK_ERROR_SETUP_FAILED, _("Failed to block syscall %d: %s"), scall, flatpak_seccomp_strerror (r));
-    }
-
-  if (!devel)
-    {
-      for (i = 0; i < G_N_ELEMENTS (syscall_nondevel_blocklist); i++)
-        {
-          int scall = syscall_nondevel_blocklist[i].scall;
-          int errnum = syscall_nondevel_blocklist[i].errnum;
-
-          g_return_val_if_fail (errnum == EPERM || errnum == ENOSYS, FALSE);
-
-          if (syscall_nondevel_blocklist[i].arg)
-            r = seccomp_rule_add (seccomp, SCMP_ACT_ERRNO (errnum), scall, 1, *syscall_nondevel_blocklist[i].arg);
-          else
-            r = seccomp_rule_add (seccomp, SCMP_ACT_ERRNO (errnum), scall, 0);
-
-          /* See above for the meaning of EFAULT. */
-          if (r == -EFAULT)
-            g_debug ("Unable to block syscall %d: syscall not known to libseccomp?",
-                     scall);
-          else if (r < 0)
-            return flatpak_fail_error (error, FLATPAK_ERROR_SETUP_FAILED, _("Failed to block syscall %d: %s"), scall, flatpak_seccomp_strerror (r));
-        }
     }
 
   /* Socket filtering doesn't work on e.g. i386, so ignore failures here
@@ -2178,14 +2180,14 @@ flatpak_run_setup_usr_links (FlatpakBwrap *bwrap,
 }
 
 /* Directories in /sys to share with the sandbox if accessible. */
-static const char *const sysfs_dirs[] =
-{
-  "/sys/block",
-  "/sys/bus",
-  "/sys/class",
-  "/sys/dev",
-  "/sys/devices"
-};
+// static const char *const sysfs_dirs[] =
+// {
+//   "/sys/block",
+//   "/sys/bus",
+//   "/sys/class",
+//   "/sys/dev",
+//   "/sys/devices"
+// };
 
 gboolean
 flatpak_run_setup_base_argv (FlatpakBwrap   *bwrap,
@@ -2275,20 +2277,20 @@ flatpak_run_setup_base_argv (FlatpakBwrap   *bwrap,
                           "--perms", "0700", "--dir", run_dir,
                           "--setenv", "XDG_RUNTIME_DIR", run_dir,
                           "--symlink", "../run", "/var/run",
-                          "--ro-bind-try", "/proc/self/ns/user", "/run/.userns",
+                          // "--ro-bind-try", "/proc/self/ns/user", "/run/.userns",
                           /* glib uses this like /etc/timezone */
                           "--symlink", "/etc/timezone", "/var/db/zoneinfo",
                           NULL);
 
-  for (i = 0; i < G_N_ELEMENTS (sysfs_dirs); i++)
-    {
-      const char *dir = sysfs_dirs[i];
+  // for (i = 0; i < G_N_ELEMENTS (sysfs_dirs); i++)
+  //   {
+  //     const char *dir = sysfs_dirs[i];
 
-      if (access (dir, R_OK|X_OK) == 0)
-        flatpak_bwrap_add_args (bwrap, "--ro-bind", dir, dir, NULL);
-      else
-        g_info ("Not sharing %s with sandbox: %s", dir, g_strerror (errno));
-    }
+  //     if (access (dir, R_OK|X_OK) == 0)
+  //       flatpak_bwrap_add_args (bwrap, "--ro-bind", dir, dir, NULL);
+  //     else
+  //       g_info ("Not sharing %s with sandbox: %s", dir, g_strerror (errno));
+  //   }
 
   if (flags & FLATPAK_RUN_FLAG_DIE_WITH_PARENT)
     flatpak_bwrap_add_args (bwrap,
